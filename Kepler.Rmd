@@ -1,0 +1,510 @@
+---
+title: "Kepler"
+author: "Adrien Foucart"
+date: "18/09/2020"
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+
+options(digits=7)
+
+```
+
+# Introduction
+
+This is a personnal work in the context of the HarvardX PH125.9x Data Science professional certificate.
+
+The objectives are to present a study involving machine learning techniques and based on publicly available dataset.  
+The chosen dataset comes from observations made by the NASA Kepler space telescope. Based on the recording of light intensity, we intend to predict which star may host an exoplanet in its orbit.  
+
+## Environment  
+The project is coded in R 4.0.2. We are going to use the following libraries:
+  
+```{r loading-libs, include=TRUE}
+library(readxl)
+library(tidyverse)
+library(gridExtra)
+library(matrixStats)
+library("caret")
+library(signal,exclude = "filter")
+
+```
+
+## Github
+
+This project is available though the following **GitHub** link : https://github.com/adfouc/kepler.git
+
+## Dataset
+
+The database is hosted on **Kaggle**: https://www.kaggle.com/keplersmachines/kepler-labelled-time-series-data
+
+It was copied also in a shared **dropbox** folder: https://www.dropbox.com/sh/w1i36tti9g08n28/AAAKl7HwSB5MTrB7Unt3Vq4ba?dl=0
+
+The R code automatically download and extract this database from the dropbox folder. This one is containing two CSV files, corresponding to the training dataset and to the testing dataset.
+
+```{r loading-zip, echo=FALSE}
+
+# TO BE ADAPTED DEPENDING ON YOUR ENVIRONMENT
+setwd("/Users/foucart/Projects/kepler")
+
+# download and unzip the data files ------------------------------------------------------
+
+if (file.access("data/exoTest.csv")) {
+
+  if (file.access("data/1074_1995_compressed_exoTest.csv.zip")) {
+
+    if (! dir.exists("data")) {
+      dir.create("data")
+    }
+    # Download the zip files from DropBox shared link
+    # This  sometimes fails. In case of issue, please download manually to directory data/
+    download.file(url="https://www.dropbox.com/s/lrznnx7wjyyug94/1074_1995_compressed_exoTest.csv.zip?raw=1", 
+                  destfile="data/1074_1995_compressed_exoTest.csv.zip")
+  }
+    filename<-file.path("data","1074_1995_compressed_exoTest.csv.zip")
+    unzip(filename, exdir = "data")
+}
+
+if (file.access("data/exoTrain.csv")) {
+
+  if (file.access("data/1074_1995_compressed_exoTrain.csv.zip")) {
+    download.file(url="https://www.dropbox.com/s/yuh1pjbda7sanhn/1074_1995_compressed_exoTrain.csv.zip?raw=1", 
+                  destfile="data/1074_1995_compressed_exoTrain.csv.zip")
+  }
+  filename<-file.path("data","1074_1995_compressed_exoTrain.csv.zip")
+  unzip(filename, exdir = "data")
+}
+
+# load the csv test dataset ------------------------------------------------------
+
+filename<-file.path("data","exoTest.csv")
+testdata <- read_csv(filename) 
+
+# load the csv train dataset
+
+filename<-file.path("data","exoTrain.csv")
+traindata <- read_csv(filename) 
+
+# must be 0
+if (sum(is.na(traindata)) )
+{
+  #print(sum(is.na(traindata[5087,])))
+  #print("removing NA")
+  traindata[5087,][is.na(traindata[5087,])]<-0
+  #sum(is.na(traindata[5087,]))
+} 
+
+```                  
+
+
+```{r init}
+
+tmax <- ncol(traindata)-1
+colnames(traindata) <- c("LABEL",1:tmax)
+traindata <- traindata %>% mutate(LABEL=factor(LABEL))
+traindata_orig <- traindata  
+
+stars_1 <- which(traindata_orig$LABEL==1)
+stars_2 <- which(traindata_orig$LABEL==2)
+
+```
+
+The training set contains `r nrow(traindata)` rows. The validation set contains `r nrow(testdata)` rows.  
+Each row represents a star.  
+
+```{r preview1, include=TRUE, message=FALSE}
+tibble(traindata[1:6,1:10]) %>% knitr::kable()
+```
+
+Column 1 (LABEL) tells if the star has extraplanets or not . Value "2" is an exoplanet star and value "1" is a non-exoplanet-star.
+
+Columns 2 to `r ncol(traindata)` represent the light intensity recorded for each star, at a different point in time.   
+We have no further details at this stage. We do not know in which unit this physical property is expressed exactly, but as we'll see later these values can be negative or positive and with large variations. We don't know either how much time there is between two consecutive points. We just know that the points are regularly spaced in time. The total time range is 80 days, therefore the delay between two observations is approximately 36 minutes. 
+
+## Objectives and key steps
+The objective is to build a classification algorithm. This algorithm would help us to recognize which stars have exoplanets, or rather which stars are good candidates for exoplanets and should be selected for further examinations.  
+We are going to explore the data, try to see what could be the differences between the two categories, how we might transform the data to make these differences more salient.  
+We'll try several classical machine learning algorithms, rather than focusing on a single algorithm and trying to optimize it.  
+As usual, the approach implies training the algorithm on a dedicated training dataset, then testing it on a separate validation dataset.  
+One particular aspect of our problem is that the dataset is largely unbalanced, with less than 1% of stars in the 2nd category. For this, we'll look at the confusion matrices to assess our algorithms, and not only on the level of accuracy.
+
+
+
+# Analysis
+
+## data exploration
+As stated before, the ratio of label 2 / label 1 in the training set is very poor (0.7%):
+```{r ratio}
+rbind(
+  data.frame(set="training",label1=sum(traindata$LABEL==1), label2=sum(traindata$LABEL==2), ratio=sum(traindata$LABEL==2) / sum(traindata$LABEL==1)),
+  data.frame(set="validation",label1=sum(testdata$LABEL==1), label2=sum(testdata$LABEL==2), ratio=sum(testdata$LABEL==2) / sum(testdata$LABEL==1))
+) %>% knitr::kable()
+
+```
+
+
+```{r functions-plot, include = FALSE}
+# function to tidy matrix to time series dataframe
+matrix_to_df <- function(traindata, sample){
+  traindata  <- traindata %>% 
+  	mutate(star= row_number()) %>% 
+	filter(star %in% sample) %>%
+  	gather(time, value, -c(LABEL,star)) %>% 
+  	mutate(time = str_replace(string=time, pattern="FLUX.", replacement="")) 
+   traindata %>% 
+  	mutate(time = as.numeric(time), star=factor(star), LABEL=factor(LABEL))
+}
+
+# function plotting a time serie for a sample of  both classes
+timeplot_sample <- function(timematrix, sample, timemin=0,timemax=tmax,title="Time evolution") 
+{
+  timedf <- 
+	timematrix %>% 
+	mutate(star= row_number()) %>% 
+	filter(star %in% sample) %>%
+	gather(time, value, -c(LABEL,star)) %>%
+	mutate(time = as.numeric(time), star=factor(star), LABEL=factor(LABEL))
+  timedf %>% 
+	filter(time>= timemin & time<= timemax) %>%
+  	ggplot(aes(time, value)) +
+  	geom_line(aes(group=star, color=LABEL)) +
+    ggtitle(title)
+}
+
+# plot two input samples in parallel
+dualplot_sample <- function(timematrix, sample_1, sample_2,title1="sample 1", title2="sample 2", timemin=0,timemax=tmax)
+{
+  samp_st <- c(sample_1,sample_2)
+  timedf <- timematrix %>% 
+	  mutate(star= row_number()) %>% 
+	  filter(star %in% samp_st) %>%
+    gather(time, value, -c(LABEL,star)) %>%
+	  mutate(time = as.numeric(time), star=factor(star), LABEL=factor(LABEL))
+  p1 <- timedf %>% 
+  	filter(star %in% sample_1) %>% 
+  	filter(time>= timemin & time<= timemax) %>%
+	  ggplot(aes(time, value)) +
+  	geom_line(aes(group=star, color=star)) +
+  	ggtitle(title1)
+  p2 <- timedf %>% 
+  	filter(star %in% sample_2 ) %>% 
+  	filter(time>= timemin & time<= timemax) %>%
+	  ggplot(aes(time, value)) +
+  	geom_line(aes(group=star, color=star)) +
+  	ggtitle(title2) 
+  grid.arrange(p1, p2, nrow = 2)
+}
+
+facet_plot <- function(timematrix, sample, timemin=0,timemax=tmax) 
+{
+  timedf <- 
+	timematrix %>% 
+	mutate(star= row_number()) %>% 
+	filter(star %in% sample) %>%
+	gather(time, value, -c(LABEL,star)) %>%
+	mutate(time = as.numeric(time), star=factor(star), LABEL=factor(LABEL))
+  timedf %>% 
+	filter(time>= timemin& time <= timemax) %>%
+  	ggplot(aes(time, value)) +
+  	geom_point(aes(color=LABEL), alpha = 0.5, size=1) + facet_wrap(~star) 
+}
+
+
+```
+
+Let's plot the time evolution of a few stars in each category.
+
+```{r firstplot}
+
+set.seed(10, sample.kind = "Rounding")
+samp1 <-sample(stars_1, 10 )
+samp2 <-sample(stars_2, 10 )
+dualplot_sample(traindata, samp1, samp2, "sample of label 1", "sample of label 2")
+```
+
+```{r facetplot}
+facet_plot(traindata,c(samp1,samp2))+ggtitle("individual time plots")
+````
+
+
+
+
+## Data processing
+### Outliers and "dips"
+The data seems to contain outliers, i.e. very high or very low values, which could be due to errors in the dataset.  Meanwhile, we should not remove all of these outliers and here's the reason.  
+Looking closely at the graphs, we can figure a pattern of luminosity dropping, or dimming, for a short period at regular intervals. See these "dips" for example on the trajectory of star number 8.
+
+```{r plot8}
+timeplot_sample(traindata, 8, title = "star #8")
+```
+
+This makes sense if we think of a planet shading the star at every revolution. Detecting explonates based on this is known as the photometric technique. Unfortunately, this pattern is not visible for every exoplanet star.  
+Soon, we'll talk about data smoothing. We'll keep in mind to preserve these large negative variations. 
+
+
+### Means, deviations and normalisation
+We can compare the means and standard deviations of both classes. There are slight differences, but this is not meaningful due to the small number of stars in label 2 class.
+
+```{r means}
+vmeans <- rowMeans(as.matrix(traindata[,-1]))
+data.frame(label=factor(traindata$LABEL), level= vmeans) %>% 
+  ggplot(aes(y=abs(level),color=label)) + geom_boxplot() +
+  scale_y_continuous(trans="log2") +
+  ggtitle ("Mean absolute levels") + ylab("log2")
+````
+
+Quantile tables to compare the variability of both classes:
+
+```{r quantiles}
+
+sd_1 <- rowSds(as.matrix(traindata[stars_1,-1]), na.rm = TRUE)
+sd_2 <- rowSds(as.matrix(traindata[stars_2,-1]), na.rm = TRUE)
+print("Label 1 standard deviation quantiles")
+quantile(x=sd_1, probs=c(0.25, 0.5, 0.75, 0.95, 0.99)) %>% knitr::kable()
+print("Label 2 standard deviation quantiles")
+quantile(x=sd_2, probs=c(0.25, 0.5, 0.75, 0.95, 0.99))%>% knitr::kable()
+````
+
+At last, this plot compares the two distributions of standard deviation (x scale is root-squared).
+
+```{r sdev}
+data.frame(LABEL=1, sd=sd_1) %>% rbind( data.frame(LABEL=2, sd=sd_2) ) %>% 
+	mutate(LABEL=factor(LABEL)) %>%
+	ggplot(aes(sd /max(sd), stat(density), colour=LABEL)) +
+	geom_freqpoly(binwidth=0.01) + scale_x_sqrt() +
+	ggtitle("Densities of standard deviation")
+````
+
+There is no obvious difference between the two classes.  
+There are large variations in the standard deviations across the stars. At one point we might apply a normalisation on the values of each star, i.e. center and reduce the values of each row:
+$$ReducedV_i(t)= \frac {(V_i(t) - < V_i > ) }{ SD(V_i) } $$
+
+Here are some plots after normalisation:
+```{r normfun}
+# function : normalise the data (center and reduce the rows)
+f_norm_data <- function(timeval, center=TRUE, reduce=TRUE)
+{
+  mtx <- as.matrix(timeval[,-1])  
+  if (center) mtx <- sweep (mtx, 1, rowMeans(mtx))
+  if (reduce) mtx <- sweep (mtx, 1, rowSds(mtx), FUN="/")
+  mtx  <- as_tibble( mtx )
+  mtx  <- cbind(timeval$LABEL, mtx ) 
+  labels <- seq(1,ncol(mtx)-1) 
+  colnames(mtx) <- c("LABEL", labels) 
+  mtx
+}
+```
+
+```{r normplot}
+traindata <- f_norm_data(timeval = traindata)
+dualplot_sample(traindata, samp1, samp2,"Normalised, label 1","label 2")
+````
+
+
+
+### High pass filter
+We can see various periodic components in both categories of stars. This is not in relation to the dips we want to isolate. Therefore we want to filter out these low frequency trends to clean the signal.  
+We use the **butter** function of the **signal** package. We apply this filtering on the original data, with a cut frequency of 1/50th Nyqist Freq, which corresponds roughly to discarding events longer than a period of 80x24/(2x30)=32 hours, or 53 intervals.
+
+```{r butter}
+
+f_highfilter <- function(data)
+{            
+  bf <- butter(1, 1/30, type="high")
+  flt_train <- apply(data[,-1], 1, function(x)
+  {
+    b1 <- filtfilt(bf, x)
+    b1
+  })
+  flt_train <-cbind(data[,1], data.frame(t(flt_train)) ) 
+  colnames(flt_train) <- c("LABEL", 1:(ncol(flt_train )-1) )
+  flt_train
+}
+flt_train <- f_highfilter(traindata)
+````
+
+```{r plotfilter}
+dualplot_sample(traindata, c(130,633,1481), c(14,18,20),"initial, label 1", "initial, label 2")
+dualplot_sample(flt_train, c(130,633,1481), c(14,18,20),"filtered, label 1", "filtered, label 2")
+facet_plot(traindata,c(130,633,1481,14,18,20))+ggtitle("initial")
+facet_plot(flt_train,c(130,633,1481,14,18,20))+ggtitle("filtered")
+
+````
+
+```{r flt-train}
+traindata <- flt_train
+````
+
+
+### Smoothing
+
+In order to improve the signals by removing high frequency noise, we might want to apply a smoothing technique to the data. We use here a **loess** method (Local weighted regression).
+
+```{r smooth, include=FALSE}
+
+f_smooth <- function(matdata , span = 0.1){
+  smoothed_data <- apply(matdata[,-1],1, function(value) { 
+    fit <- data.frame(value) %>% 
+      mutate(time = row_number())%>%
+      loess(value~time, degree = 1, span=span , data=.)
+    fit$fitted 
+    })
+  smoothed_data <- as_tibble( t(smoothed_data) )
+  colnames(smoothed_data) <- 1:ncol(smoothed_data)
+  smoothed_data <- cbind(matdata$LABEL, smoothed_data)
+  colnames(smoothed_data)[1]<-"LABEL"
+  smoothed_data
+}
+smooth_traindata <- f_smooth(traindata , 0.005)
+
+```
+
+With a span of 0.005 it seems that we keep the (hopefully) usefull dips while some outliers are filtered out.
+
+```{r smoothplot}
+#dualplot_sample(traindata, 130,  14,  "initial, label 1",  "initial, label 2", timemax = 1000)
+#dualplot_sample(smooth_traindata, 130, 14,   "smoothed, label 1", "smoothed, label 2", timemax = 1000)
+timeplot_sample(traindata, 130,timemax = 1000,title = "Initial label 1 sample")
+timeplot_sample(smooth_traindata, 130,timemax = 1000,title = "Smoothed label 1 sample")
+timeplot_sample(traindata, 14,timemax = 1000,title = "Initial label 2 sample")
+timeplot_sample(smooth_traindata, 14,timemax = 1000,title = "Smoothed label 2 sample")
+
+facet_plot(traindata,c(130,633,1481,14,18,20))+ggtitle("Initial values")
+facet_plot(smooth_traindata,c(130,633,1481,14,18,20))+ggtitle("After loess smoothing")
+
+```
+
+```{r smooth-train}
+traindata <- smooth_traindata
+````
+
+
+## Discrete fourier transform
+With the idea to catch the nature of the signal with time independant factors, we proceed to a **fast-fourrier-transform** (FFT)  of the signal, which is a classic algorithm implementing the Discrete Fourrier Transform (DFT) mathematical transform: $$ X_k = \sum_{j} X_j exp^(2i \pi \frac{jk}{N}) $$  
+This algorithm transforms data, for each star, from the time domain to the frequency domain.  
+
+```{r fft-functions, include=FALSE}
+
+# perform discrete fourier transform for each star
+# keeping the amplituds of each frequency 
+apply_fft <- function(timevalues)
+{
+  freqvalues <- apply(timevalues [,-1] , 1, fft)
+  freqvalues <- as_tibble( t( Mod(freqvalues)) )
+  freqvalues  <- cbind(timevalues[,1], freqvalues ) 
+  colnames(freqvalues ) <- c(colnames(timevalues)[1], 1:(ncol(freqvalues )-1) )
+  freqvalues 
+}
+
+
+tidy_freq_matrix_to_df <- function(freq, sample = 1:nrow(freq)) {
+	freq %>%
+		mutate(star= row_number()) %>% 
+		filter(star %in% sample) %>%
+		gather(freq, value, -c(LABEL,star)) %>%
+		mutate(freq = as.numeric(freq), star=factor(star), LABEL=factor(LABEL))
+}
+
+plot_freq <- function(freqmatrix, sample1, sample2, fmax=tmax /2, FUN = log2, 
+                      lim=coord_cartesian(xlim = c(0,fmax) , ylim = c(0,30)), 
+                      title =c("Class 1 sample DFT spectrum","Class 2 sample DFT spectrum"))
+{
+  freqmatrix <- tidy_freq_matrix_to_df( freqmatrix , c(sample1,sample2))
+
+  p1 <- 
+  	freqmatrix %>% 
+	filter(star %in% sample1 ) %>% 
+	ggplot(aes(freq, FUN(value))) +
+	geom_line(aes(group=star, color=star)) +
+	ggtitle(title[1]) + 
+  lim
+  	
+  p2 <- freqmatrix %>% 
+  	filter(star %in% sample2) %>% 
+  	ggplot(aes(freq, FUN(value))) +
+  	geom_line(aes(group=star, color=star)) +
+  	ggtitle(title[2]) +
+    lim
+
+	grid.arrange(p1, p2, nrow = 2)
+}
+
+
+```
+
+FFT gives complex numbers; since we're interested in the magnitude of each frequency we consider the modulus of each $X_k$
+
+```{r applyfft, include=TRUE}
+train_fft <- apply_fft(traindata)
+train_fft[1:6, 1:10] %>% knitr::kable()
+
+```
+
+This gives a new table of `r nrow(train_fft)` rows and `r ncol(train_fft)` columns. Since the DFT is symetric with the Nyquist Frequency (N/2), we only consider the first half of the columns.  
+We might plot these spectrum for a sample of both classes:
+
+```{r plotfft}
+plot_freq(train_fft, samp1, samp2, FUN=identity,lim = coord_cartesian(xlim = c(0,500) , ylim = c(0,300)) )
+
+````
+
+
+On this last plot we can see the effect of filtering the low frequencies and also the smoothing effect on the high frequencies.
+
+We can compare it with the spectrum of the original (centered and reduced) signal :  
+
+```{r origfft}
+orig_train_fft <- f_norm_data(traindata_orig) 
+orig_train_fft <- apply_fft(orig_train_fft)
+````
+
+```{r origfftplot}
+plot_freq(orig_train_fft, samp1, samp2, FUN=identity,lim = coord_cartesian(xlim = c(0,tmax/2) , ylim = c(0,300)) ,
+  title=c("Original (centered) spectrum","Original (centered) spectrum"))
+
+````
+
+### Autocorrelation
+
+An alternate approach to the DFT is to compute the autocorrelation of the signal for each star:
+$$ C(k) = \frac {E[(X_t−\mu)(X_{t+k}−\mu)]}{\mu^2} $$ 
+```{r covar}
+f_acf <- function(data, sample, lag.max = tmax/2)
+{ 
+  xsamp <- data[sample,-1]
+  xacf <- apply(xsamp, MARGIN = 1, FUN = function(x)
+  {
+    result_acf = pacf(x, lag.max= lag.max, plot= FALSE)
+    maxacf <- 2*1.96/sqrt(length(x))
+    out <- result_acf$acf
+    out[abs(out)<maxacf] <- 0
+    out
+  })
+  xacf <- cbind(data[sample,1], t(xacf))
+  colnames(xacf) <- c("LABEL",1:(ncol(xacf)-1))
+  as.data.frame(xacf)
+}
+```
+This is done using the **pacf** function of the package.  
+```{r origfftplot}
+ac_traindata <- f_norm_data(timeval = traindata)
+dualplot_sample(ac_traindata, samp1,samp2, title1 = "Autocovariance, label 1 sample", title2 = "Autocovariance, label 2 sample")
+```
+
+## Machine learning methods
+
+### SVD factorisation
+
+# results
+
+# conclusion
+
+
+
