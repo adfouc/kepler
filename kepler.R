@@ -349,9 +349,10 @@ crossindex <- sample(1:nrow(traindata),4000)
 sum(train_fft$LABEL[-crossindex]==2)
 sum(train_fft$LABEL[crossindex]==2)
 
-# fun : assume label is column 1
-# modifies transformed and reduced matrices : Z.train and Z.test
-# Freq spectrum is symmetric so we can reduce factors by half by default for FFT data
+# Function f_svd : Computes the svd on centered matrix x. 
+# Assumes label is column 1 + reduce factors by half (by default) to analyse FFT data (Freq spectrum being symmetric) 
+# Computes the reduced matrices so as to keep 99% of the total variance
+# (global variable) Z.train is set to = Ur . Dr = X . Vr
 f_svd <- function(x, valindex=crossindex , svd.size =  round(tmax/2))
 {
 
@@ -792,7 +793,7 @@ colnames(testdata) <- c("LABEL",1:tmax)
 testdata <- testdata %>% mutate(LABEL=factor(LABEL))
 testdata_orig <- testdata
 # normalize
-tstsmp <- sample(1:nrow(testdata),10,replace=FALSE)
+# tstsmp <- sample(1:nrow(testdata),10,replace=FALSE)
 testdata <- f_norm_data(testdata)
 # high pass filter
 testdata <- f_highfilter(testdata)
@@ -801,7 +802,7 @@ testdata <- f_highfilter(testdata)
 testdata <- f_smooth(testdata, 0.005)
 testfft <- apply_fft(testdata)
 
-# projection on the SVD components 
+# projection on the principal components 
 testfft.X <- f_svdztest(trainsvd, as.matrix( testfft[, 2:(1+round(tmax/2))]) )
 testfft.X <- data.frame(testfft.X)
 
@@ -809,18 +810,63 @@ timeplot_sample(testdata, 1:10,timemax = 1000)
 plot_freq(testfft,6:10, 1:5)
 
 # evaluate final prediction using all methods
-sapply(evaluations, function (x){
+finalEval <- lapply(evaluations, function (x){
   print(c("model :", x$model))
   pred <- predict(x$fit , testfft.X)  
   conf <- confusionMatrix(pred, testdata$LABEL)
-  print(conf$byClass[c(1,2,7)])
-  list(x$model, pred, conf)
+  print(conf$table)
+  list(model = x$model, pred = pred, conf = conf)
 })
 
-# --------------------------------
-# conclusions
+metrics_eval <- data.frame()
+for(x in finalEval){ 
+  metrics=x$conf$byClass[c(1,2,7)]
+  metrics_eval <- rbind(metrics_eval, data.frame(model=x$model,  Sensitivity=metrics[1], Specificity=metrics[2],F1=metrics[3] ))
+}
+rownames(metrics_eval)<-1:nrow(metrics_eval)
+knitr::kable((metrics_eval), digits = 4 , align='r')
 
-# reduction of the complexity is not straight forward, using SVD or PCA like appraches. 
-# Indeed, the amount of class 2 data is so rare that it is not surprising the SVD cannot take class 2 elements into account.
-#
+# ensemble
+ensemble <- sapply(finalEval, function(x) { 
+  y <- data.frame(x$pred) 
+  colnames(y) <- x$model
+  y
+})
+ensemble <- data.frame(ensemble)
+head(ensemble)
+
+ensemble_score <- ensemble %>% 
+  mutate(star=row_number()) %>% 
+  gather(model,predicted,-star) %>% 
+  group_by(star) %>% 
+  summarize(score_2=sum(predicted=="2"), score_1=sum(predicted=="1"), 
+            outcome = ifelse(score_1 > score_2, "1","2")) 
+
+finalConf <- confusionMatrix(factor(ensemble_score$outcome), testdata$LABEL)
+finalConf$table
+finalConf$byClass[c(1,2,7)]
+
+# if we retain only glm and lda (based on training results)
+best_score <- ensemble %>% 
+  mutate(star=row_number()) %>% 
+  mutate(outcome=ifelse(glm=="2" | lda =="2","2","1"))
+bestConf <- confusionMatrix(factor(best_score$outcome), testdata$LABEL)
+bestConf$table
+bestConf$byClass[c(1,2,7)]
+
+# look for at at least one label 2 
+atleast_score <- ensemble %>% 
+  mutate(star=row_number()) %>% 
+  gather(model,predicted,-star) %>% 
+  group_by(star) %>% 
+  summarize(score_2=sum(predicted=="2"), score_1=sum(predicted=="1"), 
+            outcome = ifelse(score_2==0, "1","2")) 
+
+atleastConf <- confusionMatrix(factor(atleast_score$outcome), testdata$LABEL)
+atleastConf$table
+atleastConf$byClass[c(1,2,7)]
+
+
+# --------------------------------
+
 #
