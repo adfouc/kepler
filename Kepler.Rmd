@@ -92,15 +92,10 @@ testdata <- read_csv(filename)
 filename<-file.path("data","exoTrain.csv")
 traindata <- read_csv(filename) 
 
-# must be 0
-if (sum(is.na(traindata)) )
-{
-  #print(sum(is.na(traindata[5087,])))
-  #print("removing NA")
-  traindata[5087,][is.na(traindata[5087,])]<-0
-  #sum(is.na(traindata[5087,]))
-} 
-
+# there are NAs on the last row
+traindata[5087,][is.na(traindata[5087,])]<-0
+testdata[569,][is.na(testdata[569,])]<-0
+ 
 ```                  
 
 
@@ -133,18 +128,18 @@ The objective is to build a classification algorithm. This algorithm would help 
 We are going to explore the data, try to see what could be the differences between the two categories, how we might transform the data to make these differences more salient.  
 We'll try several classical machine learning algorithms, rather than focusing on a single algorithm and trying to optimize it.  
 As usual, the approach implies training the algorithm on a dedicated training dataset, then testing it on a separate validation dataset.  
-One particular aspect of our problem is that the dataset is largely unbalanced, with less than 1% of stars in the 2nd category. For this, we'll look at the confusion matrices to assess our algorithms, and not only on the level of accuracy.
+One particular aspect of our problem is that the dataset is largely unbalanced, with less than 1% of stars in the positive category. For this, we'll look at the confusion matrices to assess our algorithms, and not only on the level of accuracy.
 
 
 
 # Analysis
 
-## data exploration
+## Data exploration
 As stated before, the ratio of label 2 / label 1 in the training set is very poor (0.7%):
 ```{r ratio}
 rbind(
-  data.frame(set="training",label1=sum(traindata$LABEL==1), label2=sum(traindata$LABEL==2), ratio=sum(traindata$LABEL==2) / sum(traindata$LABEL==1)),
-  data.frame(set="validation",label1=sum(testdata$LABEL==1), label2=sum(testdata$LABEL==2), ratio=sum(testdata$LABEL==2) / sum(testdata$LABEL==1))
+  data.frame(set="training data",label1=sum(traindata$LABEL==1), label2=sum(traindata$LABEL==2), ratio=sum(traindata$LABEL==2) / sum(traindata$LABEL==1)),
+  data.frame(set="validation data",label1=sum(testdata$LABEL==1), label2=sum(testdata$LABEL==2), ratio=sum(testdata$LABEL==2) / sum(testdata$LABEL==1))
 ) %>% knitr::kable()
 
 ```
@@ -245,7 +240,7 @@ Looking closely at the graphs, we can figure a pattern of luminosity dropping, o
 timeplot_sample(traindata, 8, title = "star #8")
 ```
 
-This makes sense if we think of a planet shading the star at every revolution. Detecting explonates based on this is known as the photometric technique. Unfortunately, this pattern is not visible for every exoplanet star.  
+This makes sense if we think of a planet shading the star at every revolution. Detecting explonates based on this is known as the **photometric** technique. Unfortunately, this pattern is not visible for every exoplanet star.  
 Soon, we'll talk about data smoothing. We'll keep in mind to preserve these large negative variations. 
 
 
@@ -282,11 +277,10 @@ data.frame(LABEL=1, sd=sd_1) %>% rbind( data.frame(LABEL=2, sd=sd_2) ) %>%
 	ggtitle("Densities of standard deviation")
 ````
 
-There is no obvious difference between the two classes.  
-There are large variations in the standard deviations across the stars. At one point we might apply a normalisation on the values of each star, i.e. center and reduce the values of each row:
-$$ReducedV_i(t)= \frac {(V_i(t) - < V_i > ) }{ SD(V_i) } $$
+We cannot see obvious difference between the two classes. There are large variations in the standard deviations. We might apply a normalisation on the values of each star, i.e. center and reduce the values of each row:
+$$ReducedV_i(t)= \frac {V_i(t) - < V_i > }{ SD(V_i) } $$
 
-Here are some plots after normalisation:
+Here are a few plots after normalisation:
 ```{r normfun}
 # function : normalise the data (center and reduce the rows)
 f_norm_data <- function(timeval, center=TRUE, reduce=TRUE)
@@ -304,14 +298,14 @@ f_norm_data <- function(timeval, center=TRUE, reduce=TRUE)
 
 ```{r normplot}
 traindata <- f_norm_data(timeval = traindata)
-dualplot_sample(traindata, samp1, samp2,"Normalised, label 1","label 2")
+dualplot_sample(traindata, samp1, samp2,"Normalised, label 1","Normalised, label 2")
 ````
 
 
 
 ### High pass filter
 We can see various periodic components in both categories of stars. This is not in relation to the dips we want to isolate. Therefore we want to filter out these low frequency trends to clean the signal.  
-We use the **butter** function of the **signal** package. We apply this filtering on the original data, with a cut frequency of 1/50th Nyqist Freq, which corresponds roughly to discarding events longer than a period of 80x24/(2x30)=32 hours, or 53 intervals.
+We use the **butter** function of the **signal** package. We apply this "high" filtering on the normalised data, with a cut frequency of 1/30th Nyqist Freq, which corresponds roughly to discarding events longer than a period of 80x24x2x30/tmax= 36 hours.
 
 ```{r butter}
 
@@ -369,15 +363,15 @@ smooth_traindata <- f_smooth(traindata , 0.005)
 With a span of 0.005 it seems that we keep the (hopefully) usefull dips while some outliers are filtered out.
 
 ```{r smoothplot}
-#dualplot_sample(traindata, 130,  14,  "initial, label 1",  "initial, label 2", timemax = 1000)
-#dualplot_sample(smooth_traindata, 130, 14,   "smoothed, label 1", "smoothed, label 2", timemax = 1000)
-timeplot_sample(traindata, 130,timemax = 1000,title = "Initial label 1 sample")
-timeplot_sample(smooth_traindata, 130,timemax = 1000,title = "Smoothed label 1 sample")
-timeplot_sample(traindata, 14,timemax = 1000,title = "Initial label 2 sample")
-timeplot_sample(smooth_traindata, 14,timemax = 1000,title = "Smoothed label 2 sample")
-
-facet_plot(traindata,c(130,633,1481,14,18,20))+ggtitle("Initial values")
-facet_plot(smooth_traindata,c(130,633,1481,14,18,20))+ggtitle("After loess smoothing")
+p1 <- timeplot_sample(traindata, 130,timemax = 1000,title = "Initial label 1 sample")
+p2 <- timeplot_sample(smooth_traindata, 130,timemax = 1000,title = "Smoothed label 1 sample")
+grid.arrange(p1,p2,nrow=2)
+p1 <- timeplot_sample(traindata, 14,timemax = 1000,title = "Initial label 2 sample")
+p2 <- timeplot_sample(smooth_traindata, 14,timemax = 1000,title = "Smoothed label 2 sample")
+grid.arrange(p1,p2,nrow=2)
+p1 <- facet_plot(traindata,c(130,633,1481,14,18,20))+ggtitle("Initial values")
+p2 <- facet_plot(smooth_traindata,c(130,633,1481,14,18,20))+ggtitle("Smoothed values")
+grid.arrange(p1,p2,nrow=2)
 
 ```
 
@@ -387,8 +381,8 @@ traindata <- smooth_traindata
 
 
 ## Discrete fourier transform
-With the idea to catch the nature of the signal with time independant factors, we proceed to a **fast-fourrier-transform** (FFT)  of the signal, which is a classic algorithm implementing the Discrete Fourrier Transform (DFT) mathematical transform: $$ X_k = \sum_{j} X_j exp^(2i \pi \frac{jk}{N}) $$  
-This algorithm transforms data, for each star, from the time domain to the frequency domain.  
+With the idea to catch the nature of the signal with time independant factors, we proceed to a **fast-fourrier-transform** (FFT)  of the signal, which is a classic algorithm implementing the Discrete Fourrier Transform (DFT) mathematical tool: $$ X_k = \sum_{j} X_j exp^(2i \pi \frac{jk}{N}) $$  
+This step transforms data, for each star, from the time domain to the frequency domain.  FFT computes complex numbers; since we are interested in the magnitude of each frequency we consider the modulus of $X_k$
 
 ```{r fft-functions, include=FALSE}
 
@@ -439,7 +433,6 @@ plot_freq <- function(freqmatrix, sample1, sample2, fmax=tmax /2, FUN = log2,
 
 ```
 
-FFT gives complex numbers; since we're interested in the magnitude of each frequency we consider the modulus of each $X_k$
 
 ```{r applyfft, include=TRUE}
 train_fft <- apply_fft(traindata)
@@ -467,14 +460,14 @@ orig_train_fft <- apply_fft(orig_train_fft)
 
 ```{r origfftplot}
 plot_freq(orig_train_fft, samp1, samp2, FUN=identity,lim = coord_cartesian(xlim = c(0,tmax/2) , ylim = c(0,300)) ,
-  title=c("Original (centered) spectrum","Original (centered) spectrum"))
+  title=c("Original (centered) spectrum, label 1 sample ","Original (centered) spectrum, label 2 sample"))
 
 ````
 
 ### Autocorrelation
 
-An alternate approach to the DFT is to compute the autocorrelation of the signal for each star:
-$$ C(k) = \frac {E[(X_t−\mu)(X_{t+k}−\mu)]}{\mu^2} $$ 
+An alternate approach to the DFT would be to compute the autocorrelation of the signal for each star:
+$$ C(k) = \frac {E[(X_t-\mu)(X_{t+k}-\mu)]}{\sigma^2} $$ 
 ```{r covar}
 f_acf <- function(data, sample, lag.max = tmax/2)
 { 
@@ -492,19 +485,381 @@ f_acf <- function(data, sample, lag.max = tmax/2)
   as.data.frame(xacf)
 }
 ```
-This is done using the **pacf** function of the package.  
-```{r origfftplot}
+This is done using the **pacf** function of the stats package.  
+```{r acfplot}
 ac_traindata <- f_norm_data(timeval = traindata)
 dualplot_sample(ac_traindata, samp1,samp2, title1 = "Autocovariance, label 1 sample", title2 = "Autocovariance, label 2 sample")
 ```
 
+This metrics is not studied deeper, yet, in the present document. 
+
 ## Machine learning methods
+In this section we are going to assess the predictions using several machine learning techniques and methods.
+The predictors X are the components given by the FFT analysis. The models will have to predict the labels Y given X.  
+Our first step is to divide the training set between two parts, which is known as *cross-validation*:
+
+* one part will be used for the training of the model, 
+* the other part will be used to check the effectiveness of the method on a separate set of data.  
+Then we are going to see how to reduce the dimensionnality of the problem using *Singular Values Decomposition* (SVD).
+The SVD will be built using the training part of the cross-validation set. The principal components of the SVD will feed the models to build the predictions.  
+Finally we will assess our models on the test dataset which was originally loaded in the separate file testdata.csv.
+
+### Cross-validation
+This step proved to be a very important one.   
+
+Initially I divided the training set in a 80/20 ratio, therefore using 4000 records to train the model, and approximately 1000 records to evaluate the predictions. With that method, all the tried models failed to detect positive records. They predicted almost only label 1 records.  
+Indeed, the amount of label 2 data is so rare that it is not surprising the SVD cannot take these elements into account.
+
+The approach I finally adopted was to use a very reduced set of records to perform the SVD. I made sure this reduced training set contained a sufficient amount of labels 1 and 2.
+This way, the SVD takes into account the label 2 category in a more efficient way.
+
+Here are the number of stars in each category for the validation and testing data sets:
+
+```{r crossvalidation}
+set.seed(20, sample.kind = "Rounding")
+crossindex <- c(sample(stars_2,20), sample(stars_1,40))
+# num of stars in cross validation set:
+data.frame ( count=c("total","label 1", "label 2"), 
+            training = c(length(train_fft$LABEL[crossindex]), sum(train_fft$LABEL[crossindex]==1), sum(train_fft$LABEL[crossindex]==2)),
+            testing    = c(length(train_fft$LABEL[-crossindex]), sum(train_fft$LABEL[-crossindex]==1), sum(train_fft$LABEL[-crossindex]==2))) %>%
+  knitr::kable()
+```
+
+Thus, we randomly chose 20 positive stars and 40 negative stars, to build a training set of 60 records.
+This choice has no theorical justification, but this way we have a roughly balanced dataset, with 33% of positive stars, compared with the initial 0.7%.
 
 ### SVD factorisation
+The number of FFT components is `r round((ncol(train_fft)-1)/2)`. Our concern is to reduce the number of components. 
+We use the **Singular Values Decomposition** (SVD) algorithm. 
 
-# results
+SVD computing is applied on the $X_{train}=X[crossindex]$ matrix (which is the fft analysis restricted to the cross-validation training subset), after centering X columns.
+$$ centered(X_{train}) = U.D.V^T $$
 
-# conclusion
+To reduce the number of components, we keep the first K out of N values of diagonal matrix D, so as to preserve 99% of the total variance of X. 
+$$ \sum_{i=1}^{i=K}{D_i^2} = 0.99 * \sum_{i=1}^{i=N}{D_i^2} $$
+
+```{r svdfunc}
+# Function f_svd : Computes the svd on centered matrix x. 
+# Assumes label is column 1 + reduce factors by half (by default) to analyse FFT data (Freq spectrum being symmetric) 
+# Computes the reduced matrices so as to keep 99% of the total variance
+# (global variable) Z.train is set to = Ur . Dr = X . Vr
+f_svd <- function(x, valindex=crossindex , svd.size =  round(tmax/2))
+{
+
+  X.train <- as.matrix( x [valindex , 2:(1+svd.size)] )
+  print(c("SVD, dim of X : ",dim(X.train)))
+  
+  # center 
+  X.train <- sweep(X.train , 2, colMeans(X.train ), FUN="-")
+
+  # SVD transform
+  svdtrain <- svd(X.train)
+
+  print(c("Dim of U : ", dim(svdtrain$u)))
+  print(c("Dim of V : ", dim(svdtrain $v)))
+  print(c("Len of D : ", length(svdtrain$d)))
+ 
+  # print(max (abs(  X.train - sweep(svdtrain$u, 2, svdtrain$d, FUN="*") %*% t(svdtrain$v) ) ))
+
+  # keep 99% of variance
+
+  sumsd <- sapply(1:length(svdtrain$d), function(x) {  
+	sum(svdtrain$d[1:x]^2) / sum(svdtrain$d^2) 
+  } )
+  svd.factors <- which.min (abs( 0.99-sumsd) )
+
+  print(c("Number of factors  : ",svd.factors))
+  print(c("Covered variance   : ",sum(svdtrain$d[1:svd.factors ]^2) / sum(svdtrain$d^2)))
+
+  # reduced matrices
+
+  Ur <- svdtrain$u[, 1:svd.factors]
+  Vr <- svdtrain$v[, 1:svd.factors]
+  Dr <- svdtrain$d[1:svd.factors]
+  print(c("Dim of Ur : ",dim(Ur)))
+  print(c("Dim of Vr : ",dim(Vr)))
+  print(c("Len of Dr : ",length(Dr)))
+
+
+  Z.train <<- sweep(Ur, 2, Dr, FUN="*") 
+  print(c("Dim of Z.train : ",dim (Z.train)))
+  
+  svdtrain <- list (svd=svdtrain, redfactors=svd.factors, Ur=Ur,Vr=Vr,Dr=Dr)            
+  return(svdtrain)
+}
+
+f_svdztest <- function(mysvd, X.test) 
+{
+  X.test  <- sweep(X.test  , 2, colMeans(X.test  ), "-")
+  Z.test <<- X.test %*% mysvd$Vr
+  print(c("Dim of X.test : ",dim (X.test)))
+  print(c("Dim of Z.test : ",dim (Z.test)))
+  Z.test
+}
+
+```
+
+```{r svdapply}
+
+trainsvd <- f_svd(train_fft)
+
+Z.test <- f_svdztest(trainsvd, as.matrix( train_fft[-crossindex , 2:(1+round(tmax/2))]) )
+
+```
+
+The number of components is finally `r trainsvd$redfactors`. We computed a projection on this reduced set of components : 
+$$ Z_{train} = X.V_r = U_r.D_r $$
+We also compute the projection of the testing set $X_{test} = X[-crossindex]$ :
+$$ Z_{test} = center(X_{test}).V_r $$
+
+The following boxplot shows the distribution of the 10 first $Z_{train}$ components for both categories of stars. 
+The components number 3 and 6 seem to be particularly interesting to consider if we want to classify the points. This is shown also by the next scatterplots, which help to visualise the possibility of separating the two classes when considering  particular components two by two.
+
+```{r plotsvd}
+data.frame(Z.train[,1:10]) %>% 
+	mutate (LABEL=train_fft$LABEL[crossindex]) %>% 
+	gather(factor,value,-LABEL)%>% 
+	ggplot(aes(factor,value, color=LABEL)) + 
+	geom_boxplot() + ggtitle("Distribution of main components after SVD")
+```
+
+
+
+  
+```{r plotsvd-2}
+p1 <- data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex]) %>% ggplot(aes(X1,X2,color=LABEL)) + geom_point() 
+p2 <- data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex]) %>% ggplot(aes(X1,X3,color=LABEL)) + geom_point()
+p3 <- data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex]) %>% ggplot(aes(X2,X3,color=LABEL)) + geom_point()
+p4 <- data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex]) %>% ggplot(aes(X6,X3,color=LABEL)) + geom_point()
+grid.arrange(p1, p2, p3, p4, ncol = 2, top= "Scatterplots of the training data in particular SVD axis")
+```
+
+
+
+### Model training and ensemble approach
+The ensemble approach consists in training several models, then to compare their output.
+The method used for one model is illustrated here for a **glm** model.  
+Reminder: `Z.train` was obtained from the training subset `train_fft[crossindex]` while `Z.test` was obtained from the crossvalidation subset `train_fft[-crossindex]`.
+
+```{r eval-illustration, eval=FALSE, echo=TRUE}
+fitted_model <- train(y = train_fft$LABEL[crossindex] , x = Z.train,  method = "glm")
+````
+The model fitted on Z.train is then used to make predictions on the test dataset Z.test : 
+
+```{r pred-illustration, eval=FALSE, echo=TRUE}
+pred <- predict(fitted_model, Z.test )
+confusionMatrix(
+	data = factor(pred, levels=c("1","2")), 
+	reference = train_fft$LABEL[-crossindex])
+````
+
+
+```{r eval-func}
+
+# Note some packages may have to be installed at execution
+# install.packages("naivebayes")
+# install.packages("kernlab")
+# install.packages("randomForest")
+# install.packages("fastAdaboost")
+
+eval.models <- function(x,  y, x.test,  y.test, models = c("glm", "lda", "naive_bayes", "svmLinear", "knn", "gamLoess", "multinom", "qda", "rf", "adaboost"))
+{
+  evaluations <- lapply(models, function(model){ 
+    fit <- train(y = y, x=x,  method = model)
+    pred <- predict(fit, x.test )
+    conf <- confusionMatrix(data=factor(pred, levels=c("1","2")), reference=y.test$val)
+    modelEval <- list(model=model, fit = fit, prediction = pred, confusionmatrix = conf)
+    modelEval
+  }) 
+  sapply(evaluations, function(x){ 
+    print(x$model)
+    print(x$confusionmatrix$table)
+    #print(x$confusionmatrix$byClass[c(1,2,7)])
+  } )
+  evaluations
+}
+```
+
+That logic is applied for this list of classification algorithms :  
+
+* glm : Logistic Regression Model
+* lda : Linear Discriminant Analysis
+* naive_bayes : naive Baysian classifier
+* svmLinear : linear Support Vector Machine 
+* knn : K Nearest Neighboors
+* rf : Random Forest
+
+# Results
+## Cross-validation results 
+
+Here are the confusion matrices computed for each model:
+
+```{r eval-run}
+evaluations <- eval.models(x=data.frame(Z.train), 
+                           y=train_fft$LABEL[crossindex],
+                           x.test=data.frame(Z.test),
+                           y.test=data.frame(val = train_fft$LABEL[-crossindex]), 
+                           models = c("glm", "lda","naive_bayes","svmLinear","knn","rf") )
+```
+
+For instance we can see that the random forest (rf) algorithm correctly predicts 12 labels "2" and 5 labels "1" out of a total of 17 stars which are really labels "2".     
+Following are the F1 scores, sensitivity and specificity of each model, during the evaluation on the cross-validation set: 
+```{r eval-print}
+metrics_eval <- data.frame()
+for(x in evaluations){
+    metrics=x$confusionmatrix$byClass[c(1,2,7)]
+    metrics_eval <- rbind(metrics_eval, data.frame(model=x$model,  Sensitivity=metrics[1], Specificity=metrics[2],F1=metrics[3] ))
+}
+rownames(metrics_eval)<-1:nrow(metrics_eval)
+knitr::kable((metrics_eval), digits = 4 , align='c')
+```  
+
+Naive Bayesian and KNN, though having a good F1 score, have poor ability to predict the labels 2, while glm and LDA are very efficient on this scope.
+
+## Focus on LDA training
+Let us illustrate the result of the LDA algorithm. The first following scatterplot shows the predicted class for each points in the training and validation dataset, displayed along the SVD components 3 and 6.  
+Classes 1 and 2 are shown in colors red or blue, while shapes tell if the prediction is correct (bullet) or wrong (cross). 
+  
+```{r eval-plot-lda}
+predldatrain <- predict(evaluations[[2]]$fit, data.frame(Z.train))
+data.frame(Z.train) %>% 
+  mutate (LABEL=train_fft$LABEL[crossindex] ,   PRED=predldatrain, Prediction=factor(ifelse(PRED!=LABEL,"KO","OK"))) %>% 
+  ggplot(aes(X6,X3,color=LABEL, alpha=0.5, size=2)) + 
+  scale_shape_manual(values = c("cross", "bullet")) +
+  geom_point(aes( shape=Prediction)) +
+  ggtitle("LDA predictions on training data") +
+  guides(alpha=FALSE, size=FALSE)
+
+```
+
+Now this is the same plot for the testing data, restricted to the labels 2 and a subset of the labels 1, in order to be readable.
+
+```{r eval-plot-lda-2}
+
+predldatest <- predict(evaluations[[2]]$fit, data.frame(Z.test))
+data.frame(Z.test) %>% 
+  mutate (LABEL=train_fft$LABEL[-crossindex] ,   PRED=predldatest, Prediction=factor(ifelse(PRED!=LABEL,"KO","OK"))) %>% 
+  filter (row_number()<100) %>%
+  ggplot(aes(X6,X3,color=LABEL, alpha=0.5, size=2)) + 
+  scale_shape_manual(values = c("cross", "bullet")) +
+  geom_point(aes( shape=Prediction)) +
+  ggtitle("LDA predictions on testing data") +
+  guides(alpha=FALSE, size=FALSE)
+
+```
+
+As can be seen, there are a few bad predictions for the labels 1, but only one bad prediction for labels 2. This is indeed what we are trying to achieve: we prefer not to miss labels 2, i.e. having false negatives, even if we have a few labels 1 predicted as labels 2, i.e. false positives.
+
+## Predictions on the testing dataset 
+Considering now the *testdata.csv* input, we have to apply the following transformations :
+
+* normalize the rows (center and reduce)
+* filter the low frequencies (high pass 1st order)
+* smooth the rows (loess)
+* spectrum analysis (FFT)
+* project the centered columns onto the previously defined 49 principal components (SVD)
+
+```{r testdata-prep}
+colnames(testdata) <- c("LABEL",1:tmax)
+testdata <- testdata %>% mutate(LABEL=factor(LABEL))
+testdata_orig <- testdata
+testdata <- f_norm_data(testdata)
+testdata <- f_highfilter(testdata)
+testdata <- f_smooth(testdata, 0.005)
+testfft <- apply_fft(testdata)
+testfft.X <- f_svdztest(trainsvd, as.matrix( testfft[, 2:(1+round(tmax/2))]) )
+testfft.X <- data.frame(testfft.X)
+```
+
+Then we are able to compute predictions, using the previously trained models, on this test dataset. We can look at the confusion matrices, specificities, sentivities and F1 scores:
+
+```{r testdata-eval}
+finalEval <- lapply(evaluations, function (x){
+  print(c("model :", x$model))
+  pred <- predict(x$fit , testfft.X)  
+  conf <- confusionMatrix(pred, testdata$LABEL)
+  print(conf$table)
+  list(model = x$model, pred = pred, conf = conf)
+})
+
+final_metrics_eval <- data.frame()
+for(x in finalEval){ 
+  metrics=x$conf$byClass[c(1,2,7)]
+  final_metrics_eval <- rbind(final_metrics_eval, data.frame(model=x$model,  Sensitivity=metrics[1], Specificity=metrics[2],F1=metrics[3] ))
+}
+rownames(final_metrics_eval)<-1:nrow(final_metrics_eval)
+knitr::kable((final_metrics_eval), digits = 4 , align='c')
+```
+
+Due to the very low number of labels 2, it is not straightforward to qualify the results, because missing a single label "2" means a loss in accuracy of 20%. We can see that only GLM and LDA have good results at predicting labels 2.  
+Compare with the results on the cross-validation set:   
+`r knitr::kable((metrics_eval), digits = 4 , align='c')`
+Some models are relatively consistent, such as glm and lda, while other models have much poorer results, as naive bayes and random forests. We might think that for this problem some models have better generalisation capacities. 
+
+## Ensemble prediction
+We now try to predict the outcomes by taking into account each of the models predictions. 
+
+```{r ensemble}
+ensemble <- sapply(finalEval, function(x) { 
+  y <- data.frame(x$pred) 
+  colnames(y) <- x$model
+  y
+})
+ensemble <- data.frame(ensemble) %>% mutate (star=row_number())
+head(ensemble) %>% knitr::kable(align = "c")
+```
+
+Giving the same weigh to each model, we consider predicted label by each model, and we keep the value that is predicted by more than 50% of the models.
+
+```{r ensemble-score}
+ensemble_score <- ensemble %>% 
+  mutate(star=row_number()) %>% 
+  gather(model,predicted,-star) %>% 
+  group_by(star) %>% 
+  summarize(score_2=sum(predicted=="2"), score_1=sum(predicted=="1"), 
+            outcome = ifelse(score_1 > score_2, "1","2")) 
+head(ensemble_score) %>% knitr::kable(align = "c")
+```
+
+This gives the following confusion table and scores:
+
+```{r ensemble-res}
+finalConf <- confusionMatrix(factor(ensemble_score$outcome), testdata$LABEL)
+finalConf$table 
+finalConf$byClass[c(1,2,7)] 
+```
+
+We can see that the specificity is not so good with 40%. This is because a majority of models are bad at guessing labels 2.  
+
+During training we saw GLM and LDA models were performing better. If we retain only these two models predictions, we have this:
+
+```{r glmlda}
+best_score <- ensemble %>% 
+  mutate(star=row_number()) %>% 
+  mutate(outcome=ifelse(glm=="2" | lda =="2","2","1"))
+bestConf <- confusionMatrix(factor(best_score$outcome), testdata$LABEL)
+bestConf$table
+bestConf$byClass[c(1,2,7)]
+```
+
+Keeping these last two models, we correctly predict 80% of the labels 2, but with more than 40% of errors on labels 1 this is not very interesting in the end.  
+
+# Conclusions
+We explored the dataset and focused on some sample stars of each classes, and applied some **transformations**. 
+The *normalisation*, aka centering and reduction of the values across time for each star, removes the large discrepancies we can see on the original data.  
+A *detrending* has been done, by means of filtering the low frequency components of the individual signals. This should discard the contribution of events longer than 36 hours, and that we think are not related to the dimming of light caused by a planet.  
+A *smoothing* has also been applied, with the aim to discard this time the high frequency components, that we consider as noise.  
+We applied a *FFT* to analyse the components of the frequency spectrum, rather than the time values.  
+A *SVD* transformation helped to reduce the number of components.  
+A major difficulyt in this project is the low incidence rate of the label 2 stars (exoplanet stars). 
+To deal with this, the SVD was applied on a reduced set of data, while making sure label 2 incidence was sufficiently important in this reduced dataset.  
+This way the trained algorithms gave interesting results, though far from perfect. Applying our models on the test data set, we are facing a difficulty to isolate exoplanet stars (labels 2). Algorithms that perform well in detecting labels 2 also wrongly classify many labels 1. At best these algorithms could help to discard a part of the non-exoplanet stars, and even this would not be perfect.
+
+Among directions for **future works**, we might study more precisely the impact of the data transformations. When filtering high and low frequencies, there might be optimal cutoff values.  
+We should have a closer look at those labels 2 stars that could not be classified, and see if there could be an evidence of interesting new characteristics.  
+We should also probably work on the crossvalidation, since the selection of the training set must have a strong impact on the quality of the calibrations.  
+Beyond FFT analysis, we should consider other statistical measures of the signal, such as covariance, just to quote an example.  
+We did not tried either to optimise the algorithms, and this could be an important axis of progression: number of neighbours for KNN, depths of tress for random forests, kind of regularisation, kinbd of kernels, etc.  
 
 
 
