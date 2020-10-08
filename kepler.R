@@ -25,7 +25,7 @@ if (file.access("data/exoTest.csv")) {
     if (! dir.exists("data")) {
       dir.create("data")
     }
-    # TODO :  download the zip files from DropBox shared link
+    #  download the zip files from DropBox shared link
     download.file(url="https://www.dropbox.com/s/lrznnx7wjyyug94/1074_1995_compressed_exoTest.csv.zip?raw=1", 
                   destfile="data/1074_1995_compressed_exoTest.csv.zip")
   }
@@ -37,7 +37,7 @@ if (file.access("data/exoTrain.csv")) {
 
   if (file.access("data/1074_1995_compressed_exoTrain.csv.zip")) {
 
-    # TODO :  download the zip files from DropBox shared link
+    #  download the zip files from DropBox shared link
 
     download.file(url="https://www.dropbox.com/s/yuh1pjbda7sanhn/1074_1995_compressed_exoTrain.csv.zip?raw=1", 
                   destfile="data/1074_1995_compressed_exoTrain.csv.zip")
@@ -285,34 +285,6 @@ plot_freq <- function(freqmatrix, sample1, sample2, fmax=tmax /2, FUN = log2)
 plot_freq(train_fft, samp1, samp2)
 
 
-#
-# test on a reduced data set to check the effect of filtering the low freq in fft
-#
-reduced_set <- traindata[c(130,633,1481,14,18,20),]
-dualplot_sample(reduced_set,1:3,4:6)
-reduced_complex_fft <- apply(reduced_set[,-1] , 1, fft)
-reduced_fft <- as_tibble( t( Mod(reduced_complex_fft )) )
-reduced_fft <- cbind(reduced_set[,1], reduced_fft) 
-colnames(reduced_fft) <- c('LABEL', 1:(ncol(reduced_fft)-1) )
-plot_freq(reduced_fft , 1:3,4:6)
-reduced_reverse_set <- apply(reduced_complex_fft , 2, fft, inverse = TRUE)/tmax
-reduced_reverse_set <- Re(t(reduced_reverse_set ))
-reduced_reverse_set  <- cbind(reduced_set[,1],reduced_reverse_set)
-colnames(reduced_reverse_set) <- c('LABEL', 1:(ncol(reduced_reverse_set)-1) )
-dualplot_sample(reduced_reverse_set,1:3,4:6)
-
-reduced_complex_fft [c(1:500,(tmax-500):tmax),]<-0
-reduced_fft <- as_tibble( t( Mod(reduced_complex_fft )) )
-reduced_fft <- cbind(reduced_set[,1], reduced_fft) 
-colnames(reduced_fft) <- c('LABEL', 1:(ncol(reduced_fft)-1) )
-plot_freq(reduced_fft , 1:3,4:6)
-
-reduced_reverse_set <- apply(reduced_complex_fft , 2, fft, inverse = TRUE)/tmax
-reduced_reverse_set <- Re(t(reduced_reverse_set ))
-reduced_reverse_set  <- cbind(reduced_set[,1],reduced_reverse_set)
-colnames(reduced_reverse_set) <- c('LABEL', 1:(ncol(reduced_reverse_set)-1) )
-dualplot_sample(reduced_reverse_set,1:3,4:6)
-
 
 
 # ------------------------------------------
@@ -496,7 +468,6 @@ plot_freq(train_fft, samp1, samp2)
 trainsvd <- f_svd(train_fft)
 Z.test <- f_svdztest(trainsvd, as.matrix( train_fft[-crossindex , 2:(1+round(tmax/2))]) )
 
-# passage de 7 à 116 composantes ! 
 data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex]) %>% gather(factor,value,-LABEL)%>% ggplot(aes(factor,value, color=LABEL)) + geom_boxplot() 
 
 evaluations <- eval.models(x=data.frame(Z.train), 
@@ -555,20 +526,6 @@ evaluations <- eval.models(x=data.frame(Z.train),
 
 
 
-# -------------------------
-# centering of the rows  
-# -> pas tres concluant
-c_traindata <- f_norm_data(traindata, center=TRUE,reduce=FALSE)
-c_train_fft <- apply_fft(c_traindata)
-plot_freq(c_train_fft, samp1, samp2)
-
-rowMeans(as.matrix(train_fft[samp1,-1]))
-c_train_fft[samp1,1000:1100]
-rowMeans(as.matrix(traindata[samp1,-1]))
-rowSds(as.matrix(traindata[samp1,-1]))
-
-origfft<-apply_fft(traindata_orig)
-plot_freq(origfft, samp1, samp2)
 
 # -------------------------#
 # filter out the low frequency trend
@@ -608,7 +565,6 @@ dualplot_sample(b1, c(130,633,1481), c(14,18,20))
 facet_plot(traindata,c(130,633,1481,14,18,20))
 facet_plot(b1,c(130,633,1481,14,18,20))
 
-# quel benefice?
 train_fft <- apply_fft(b1)
 plot_freq(train_fft, samp1, samp2)
 
@@ -627,69 +583,8 @@ evaluations <- eval.models(x=data.frame(Z.train),
                            y.test=data.frame(val = train_fft$LABEL[-crossindex]), 
                            models = c("glm", "lda", "qda","naive_bayes","knn","rf") )
 
-# -> specificity = 0 for all
-
 timeplot_sample(traindata, c(130,633,1481,14,18,20),0,500)
 timeplot_sample(b1, c(130,633,1481,14,18,20),0,500)
-
-# -------------------------
-# essayons de conserver les dips : seuillage sous N*SD
-
-
-ix <- c(130,633,1481,14,18,20)
-sdx <- rowSds(as.matrix(traindata[ix,-1]), na.rm = TRUE)
-matrix_to_df(traindata,ix)%>% inner_join(data.frame(star=factor(ix), sd=sdx)) %>% 
-  filter(value<(-2)*sd) %>% 
-  ggplot(aes(time,value,color=star)) + geom_point()
-#  arrange(star, time) %>% view
-
-sdx <- rowSds(as.matrix(traindata[,-1]), na.rm = TRUE)
-sdx <- data.frame(sd=sdx) %>% mutate(star=factor(row_number()))
-matrix_to_df(traindata,1:nrow(traindata))%>% inner_join(sdx, by="star") %>% 
-  filter(value<(-2)*sd) %>% filter(star==1)
-
-floortrain<- apply(traindata[,-1], 1, function(x){
-  ifelse(x<(-2)*sd(x),x,0)
-})
-floortrain <- as_tibble( t(floortrain) )
-colnames(floortrain) <- 1:ncol(floortrain)
-floortrain <- cbind(traindata$LABEL, floortrain)
-colnames(floortrain)[1]<-"LABEL"
-
-timeplot_sample(floortrain, c(130,633,1481,14,18,20),0,500)
-dualplot_sample(floortrain,samp1,samp2)
-
-train_fft <- apply_fft(floortrain)
-plot_freq(train_fft, samp1, samp2)
-
-# this leads to poor results again, except for glm:
-# Sensitivity : 0.052729       
-# Specificity : 0.833333 
-
-# -------------------------
-# back to data exploration 
-
-# pattern close to 3 or 4 days
-timeplot_sample(traindata_orig, c(100,2), 12, 30)
-plot_freq(train_fft, c(100), c(2), 4/90*tmax*2)
-
-timeplot_sample(traindata_orig, c(101,3), 12, 30)
-timeplot_sample(traindata_orig, c(102,4), 0, 30)
-timeplot_sample(traindata, c(102,4), 0, 30)
-
-f_print_vec_stats <- function(x, rownum=1)
-{
-  vec <- x[rownum, -1] 
-  print(quantile(vec, probs=c(0.25, 0.5, 0.75, 0.95, 0.99)))
-  print(sort( vec ,decreasing=TRUE) [1:10])
-  print(sort( vec ,decreasing=FALSE) [1:10])
-}
-
-f_print_vec_stats(train_fft[,1:(tmax/2)],2)
-90/16
-train_fft[4,2:20]
-
-
 
 # -------------------------
 ## Approach : auto covariance
@@ -774,7 +669,7 @@ evaluations <- eval.models(x=data.frame(Z.train),
                            models = c("glm", "lda","naive_bayes","knn","rf") )
 evaluations[[2]]$confusionmatrix$table
 
-# illustrate the LDA components?
+# illustrate the LDA components
 # on training set
 predldatrain <- predict(evaluations[[2]]$fit, data.frame(Z.train))
 data.frame(Z.train) %>% mutate (LABEL=train_fft$LABEL[crossindex] ,   LDAPRED=predldatrain) %>% 
@@ -866,7 +761,3 @@ atleastConf <- confusionMatrix(factor(atleast_score$outcome), testdata$LABEL)
 atleastConf$table
 atleastConf$byClass[c(1,2,7)]
 
-
-# --------------------------------
-
-#
